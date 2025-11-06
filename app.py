@@ -26,6 +26,15 @@ try:
 except ImportError:
     GEMINI_AVAILABLE = False
     genai = None
+
+# Audio generation import
+try:
+    import pyttsx3
+    import uuid
+    AUDIO_AVAILABLE = True
+except ImportError:
+    AUDIO_AVAILABLE = False
+    pyttsx3 = None
 from typing import Dict, List, Any, Optional
 
 # Configure logging
@@ -488,6 +497,105 @@ Be genuine, supportive, and professional. Avoid giving medical advice."""
             'confidence': 0.5
         }
 
+class AudioGenerator:
+    """Generate audio responses from text using pyttsx3"""
+    
+    def __init__(self):
+        self.audio_available = AUDIO_AVAILABLE
+        self.audio_dir = 'temp_audio'
+        self._ensure_audio_directory()
+        
+        if self.audio_available:
+            try:
+                # Initialize TTS engine
+                self.engine = pyttsx3.init()
+                
+                # Configure voice settings
+                voices = self.engine.getProperty('voices')
+                if voices:
+                    # Try to use a female voice if available
+                    for voice in voices:
+                        if 'female' in voice.name.lower() or 'zira' in voice.name.lower():
+                            self.engine.setProperty('voice', voice.id)
+                            break
+                
+                # Set speech rate (slower for therapeutic effect)
+                self.engine.setProperty('rate', 160)  # Default is usually 200
+                
+                # Set volume
+                self.engine.setProperty('volume', 0.9)
+                
+                logger.info("Audio generator initialized successfully")
+                
+            except Exception as e:
+                logger.warning(f"Audio engine initialization failed: {e}")
+                self.audio_available = False
+        else:
+            logger.warning("pyttsx3 not available - audio generation disabled")
+    
+    def _ensure_audio_directory(self):
+        """Ensure audio directory exists"""
+        if not os.path.exists(self.audio_dir):
+            os.makedirs(self.audio_dir)
+    
+    def generate_audio(self, text: str) -> Optional[str]:
+        """Generate audio file from text"""
+        
+        if not self.audio_available:
+            return None
+        
+        try:
+            # Generate unique filename
+            audio_id = str(uuid.uuid4())[:8]
+            filename = f"response_{audio_id}.wav"
+            filepath = os.path.join(self.audio_dir, filename)
+            
+            # Generate audio
+            self.engine.save_to_file(text, filepath)
+            self.engine.runAndWait()
+            
+            # Verify file was created
+            if os.path.exists(filepath):
+                logger.info(f"Audio generated: {filename}")
+                return filename
+            else:
+                logger.error(f"Audio file not created: {filepath}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Audio generation failed: {e}")
+            return None
+    
+    def cleanup_old_audio(self, max_files: int = 50):
+        """Clean up old audio files to prevent storage bloat"""
+        
+        try:
+            if not os.path.exists(self.audio_dir):
+                return
+            
+            # Get all audio files sorted by creation time
+            audio_files = []
+            for filename in os.listdir(self.audio_dir):
+                if filename.endswith('.wav'):
+                    filepath = os.path.join(self.audio_dir, filename)
+                    audio_files.append((filepath, os.path.getctime(filepath)))
+            
+            # Sort by creation time (oldest first)
+            audio_files.sort(key=lambda x: x[1])
+            
+            # Remove oldest files if we exceed max_files
+            if len(audio_files) > max_files:
+                files_to_remove = audio_files[:-max_files]
+                for filepath, _ in files_to_remove:
+                    try:
+                        os.remove(filepath)
+                        logger.info(f"Cleaned up old audio file: {os.path.basename(filepath)}")
+                    except Exception as e:
+                        logger.warning(f"Failed to remove audio file {filepath}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Audio cleanup failed: {e}")
+
 class DatabaseManager:
     """Manage user conversations and analytics"""
     
@@ -592,6 +700,7 @@ class DatabaseManager:
 hf_client = HuggingFaceModelClient()
 empathy_engine = EmpathyEngine()
 db_manager = DatabaseManager()
+audio_generator = AudioGenerator()
 
 # Utility functions
 def log_request(f):
@@ -677,7 +786,8 @@ def health_check():
             'huggingface_available': True,
             'empathy_engine': True,
             'database': True,
-            'gemini_ai': empathy_engine.gemini_available
+            'gemini_ai': empathy_engine.gemini_available,
+            'audio_generation': audio_generator.audio_available
         }
     })
 
@@ -822,6 +932,19 @@ def chat_message():
         empathetic_response = empathy_engine.generate_response(message, emotions)
         response_time = time.time() - response_start
         
+        # Generate audio for the response
+        audio_start = time.time()
+        audio_filename = None
+        if empathetic_response.get('success') and empathetic_response.get('response'):
+            response_text = empathetic_response['response']
+            audio_filename = audio_generator.generate_audio(response_text)
+            
+            # Clean up old audio files periodically
+            if audio_filename:
+                audio_generator.cleanup_old_audio()
+        
+        audio_time = time.time() - audio_start
+        
         # Save conversation
         db_manager.save_conversation(user_id, message, emotions, empathetic_response, model_type)
         
@@ -832,11 +955,17 @@ def chat_message():
             'user_id': user_id,
             'emotion_analysis': emotions,
             'empathetic_response': empathetic_response,
+            'audio': {
+                'available': audio_filename is not None,
+                'filename': audio_filename,
+                'url': f'/api/audio/{audio_filename}' if audio_filename else None
+            },
             'model_used': model_type,
             'processing_time': {
                 'emotion_detection': round(emotion_time, 3),
                 'response_generation': round(response_time, 3),
-                'total': round(emotion_time + response_time, 3)
+                'audio_generation': round(audio_time, 3),
+                'total': round(emotion_time + response_time + audio_time, 3)
             },
             'timestamp': datetime.now().isoformat()
         }
@@ -860,6 +989,26 @@ def chat_message():
             'message': 'An error occurred during chat interaction',
             'timestamp': datetime.now().isoformat()
         }), 500
+
+@app.route('/api/audio/<filename>')
+def serve_audio(filename):
+    """Serve generated audio files"""
+    try:
+        # Security: only allow audio files
+        if not filename.endswith('.wav') or '..' in filename:
+            return jsonify({'error': 'Invalid filename'}), 400
+        
+        filepath = os.path.join(audio_generator.audio_dir, filename)
+        
+        if os.path.exists(filepath):
+            from flask import send_file
+            return send_file(filepath, mimetype='audio/wav')
+        else:
+            return jsonify({'error': 'Audio file not found'}), 404
+            
+    except Exception as e:
+        logger.error(f"Error serving audio file: {e}")
+        return jsonify({'error': 'Failed to serve audio'}), 500
 
 @app.route('/api/chat/history/<user_id>')
 def get_chat_history(user_id):
