@@ -18,7 +18,14 @@ from functools import wraps
 import traceback
 import sqlite3
 from werkzeug.exceptions import BadRequest, InternalServerError
-import google.generativeai as genai
+
+# Optional Gemini AI import
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    genai = None
 from typing import Dict, List, Any, Optional
 
 # Configure logging
@@ -233,12 +240,17 @@ class EmpathyEngine:
         # Initialize Gemini API if available
         self.gemini_available = False
         try:
-            gemini_key = os.environ.get('GEMINI_API_KEY')
-            if gemini_key:
-                genai.configure(api_key=gemini_key)
-                self.gemini_model = genai.GenerativeModel('gemini-pro')
-                self.gemini_available = True
-                logger.info("Gemini API initialized successfully")
+            if GEMINI_AVAILABLE:
+                gemini_key = os.environ.get('GEMINI_API_KEY')
+                if gemini_key:
+                    genai.configure(api_key=gemini_key)
+                    self.gemini_model = genai.GenerativeModel('gemini-pro')
+                    self.gemini_available = True
+                    logger.info("Gemini API initialized successfully")
+                else:
+                    logger.info("Gemini API key not provided")
+            else:
+                logger.info("Gemini AI library not installed")
         except Exception as e:
             logger.warning(f"Gemini API not available: {e}")
         
