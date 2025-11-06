@@ -47,14 +47,12 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
 # Enable CORS for React Native
 CORS(app, origins=["*"])
 
-# Initialize rate limiter
-limiter.init_app(app)
-
 # Rate limiting
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour"]
 )
+limiter.init_app(app)
 
 class HuggingFaceModelClient:
     """Client for interacting with HuggingFace models"""
