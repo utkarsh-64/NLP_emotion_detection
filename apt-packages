@@ -1,0 +1,6 @@
+espeak
+espeak-data
+libespeak1
+libespeak-dev
+alsa-utils
+pulseaudio
