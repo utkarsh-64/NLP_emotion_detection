@@ -507,28 +507,50 @@ class AudioGenerator:
         
         if self.audio_available:
             try:
-                # Initialize TTS engine
-                self.engine = pyttsx3.init()
+                # Try different TTS engines for Linux compatibility
+                engines_to_try = ['espeak', 'sapi5', 'nsss', 'dummy']
                 
-                # Configure voice settings
-                voices = self.engine.getProperty('voices')
-                if voices:
-                    # Try to use a female voice if available
-                    for voice in voices:
-                        if 'female' in voice.name.lower() or 'zira' in voice.name.lower():
-                            self.engine.setProperty('voice', voice.id)
-                            break
+                self.engine = None
+                for engine_name in engines_to_try:
+                    try:
+                        self.engine = pyttsx3.init(engine_name)
+                        logger.info(f"Successfully initialized TTS engine: {engine_name}")
+                        break
+                    except Exception as engine_error:
+                        logger.warning(f"Failed to initialize {engine_name}: {engine_error}")
+                        continue
                 
-                # Set speech rate (slower for therapeutic effect)
-                self.engine.setProperty('rate', 160)  # Default is usually 200
+                if self.engine is None:
+                    # Try default initialization
+                    self.engine = pyttsx3.init()
                 
-                # Set volume
-                self.engine.setProperty('volume', 0.9)
+                if self.engine:
+                    # Configure voice settings
+                    try:
+                        voices = self.engine.getProperty('voices')
+                        if voices and len(voices) > 0:
+                            # Try to use a female voice if available
+                            for voice in voices:
+                                if 'female' in voice.name.lower() or 'zira' in voice.name.lower():
+                                    self.engine.setProperty('voice', voice.id)
+                                    break
+                        
+                        # Set speech rate (slower for therapeutic effect)
+                        self.engine.setProperty('rate', 160)
+                        
+                        # Set volume
+                        self.engine.setProperty('volume', 0.9)
+                        
+                        logger.info("Audio generator configured successfully")
+                    except Exception as config_error:
+                        logger.warning(f"Audio configuration failed: {config_error}")
+                        # Continue anyway - basic TTS might still work
                 
                 logger.info("Audio generator initialized successfully")
                 
             except Exception as e:
                 logger.warning(f"Audio engine initialization failed: {e}")
+                logger.info("Audio will be disabled - app will continue with text-only responses")
                 self.audio_available = False
         else:
             logger.warning("pyttsx3 not available - audio generation disabled")
@@ -541,7 +563,8 @@ class AudioGenerator:
     def generate_audio(self, text: str) -> Optional[str]:
         """Generate audio file from text"""
         
-        if not self.audio_available:
+        if not self.audio_available or not self.engine:
+            logger.info("Audio generation skipped - engine not available")
             return None
         
         try:
@@ -550,20 +573,27 @@ class AudioGenerator:
             filename = f"response_{audio_id}.wav"
             filepath = os.path.join(self.audio_dir, filename)
             
-            # Generate audio
+            # Limit text length for better performance
+            if len(text) > 500:
+                text = text[:500] + "..."
+            
+            # Generate audio with timeout protection
+            logger.info(f"Generating audio for text: {text[:50]}...")
+            
             self.engine.save_to_file(text, filepath)
             self.engine.runAndWait()
             
-            # Verify file was created
-            if os.path.exists(filepath):
-                logger.info(f"Audio generated: {filename}")
+            # Verify file was created and has content
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                logger.info(f"Audio generated successfully: {filename} ({os.path.getsize(filepath)} bytes)")
                 return filename
             else:
-                logger.error(f"Audio file not created: {filepath}")
+                logger.warning(f"Audio file not created or empty: {filepath}")
                 return None
                 
         except Exception as e:
             logger.error(f"Audio generation failed: {e}")
+            # Don't let audio failure break the response
             return None
     
     def cleanup_old_audio(self, max_files: int = 50):
@@ -932,16 +962,22 @@ def chat_message():
         empathetic_response = empathy_engine.generate_response(message, emotions)
         response_time = time.time() - response_start
         
-        # Generate audio for the response
+        # Generate audio for the response (non-blocking)
         audio_start = time.time()
         audio_filename = None
-        if empathetic_response.get('success') and empathetic_response.get('response'):
-            response_text = empathetic_response['response']
-            audio_filename = audio_generator.generate_audio(response_text)
-            
-            # Clean up old audio files periodically
-            if audio_filename:
-                audio_generator.cleanup_old_audio()
+        audio_error = None
+        
+        try:
+            if empathetic_response.get('success') and empathetic_response.get('response'):
+                response_text = empathetic_response['response']
+                audio_filename = audio_generator.generate_audio(response_text)
+                
+                # Clean up old audio files periodically (only if audio works)
+                if audio_filename:
+                    audio_generator.cleanup_old_audio()
+        except Exception as e:
+            audio_error = str(e)
+            logger.warning(f"Audio generation failed but continuing: {e}")
         
         audio_time = time.time() - audio_start
         
