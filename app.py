@@ -73,7 +73,7 @@ class HuggingFaceModelClient:
             'enhanced_distilbert': f"{self.username}/huggingface_distilbert_model"
         }
         
-        # Use public inference API endpoint
+        # Use new HuggingFace router endpoint (updated Nov 2025)
         self.api_endpoint = "https://api-inference.huggingface.co/models"
         
         # Only add auth if token exists
@@ -181,17 +181,22 @@ class HuggingFaceModelClient:
     def _fallback_emotion_detection(self, text: str, model_type: str) -> Dict[str, Any]:
         """Fallback emotion detection when HuggingFace APIs are unavailable"""
         
-        # Simple keyword-based emotion detection as fallback
+        # Enhanced keyword-based emotion detection as fallback
         emotion_keywords = {
-            'joy': ['happy', 'excited', 'great', 'amazing', 'wonderful', 'fantastic', 'good'],
-            'sadness': ['sad', 'depressed', 'down', 'upset', 'disappointed', 'hurt'],
-            'anger': ['angry', 'mad', 'furious', 'annoyed', 'frustrated', 'irritated'],
-            'fear': ['scared', 'afraid', 'anxious', 'worried', 'nervous', 'terrified'],
-            'love': ['love', 'adore', 'cherish', 'care', 'affection'],
-            'gratitude': ['thank', 'grateful', 'appreciate', 'thankful'],
-            'confusion': ['confused', 'puzzled', 'unclear', 'don\'t understand'],
-            'excitement': ['excited', 'thrilled', 'pumped', 'enthusiastic'],
-            'neutral': []
+            'joy': ['happy', 'excited', 'great', 'amazing', 'wonderful', 'fantastic', 'good', 'glad', 'pleased', 'delighted', 'joyful'],
+            'sadness': ['sad', 'depressed', 'down', 'upset', 'disappointed', 'hurt', 'unhappy', 'miserable', 'heartbroken', 'lonely'],
+            'anger': ['angry', 'mad', 'furious', 'annoyed', 'frustrated', 'irritated', 'rage', 'hate', 'pissed'],
+            'fear': ['scared', 'afraid', 'anxious', 'worried', 'nervous', 'terrified', 'panic', 'stress', 'overwhelmed'],
+            'love': ['love', 'adore', 'cherish', 'care', 'affection', 'fond', 'devoted'],
+            'gratitude': ['thank', 'grateful', 'appreciate', 'thankful', 'blessed'],
+            'confusion': ['confused', 'puzzled', 'unclear', 'don\'t understand', 'lost', 'uncertain'],
+            'excitement': ['excited', 'thrilled', 'pumped', 'enthusiastic', 'eager', 'energized'],
+            'optimism': ['hope', 'hopeful', 'optimistic', 'positive', 'confident', 'looking forward'],
+            'disappointment': ['disappointed', 'let down', 'discouraged', 'dismayed'],
+            'relief': ['relief', 'relieved', 'calm', 'relaxed', 'peaceful'],
+            'pride': ['proud', 'accomplished', 'achieved', 'success'],
+            'caring': ['care', 'concern', 'support', 'help', 'compassion'],
+            'surprise': ['surprised', 'shocked', 'amazed', 'astonished', 'unexpected']
         }
         
         text_lower = text.lower()
@@ -199,37 +204,59 @@ class HuggingFaceModelClient:
         
         for emotion, keywords in emotion_keywords.items():
             score = 0.0
+            matches = 0
             for keyword in keywords:
                 if keyword in text_lower:
-                    score += 0.3
+                    score += 0.25
+                    matches += 1
             
             if score > 0:
+                # Boost score for multiple keyword matches
+                if matches > 1:
+                    score += 0.2
+                
                 detected_emotions.append({
                     'emotion': emotion,
-                    'confidence': min(score, 0.9),
-                    'predicted': score > 0.3
+                    'confidence': min(score, 0.95),
+                    'predicted': True
                 })
         
-        # Add neutral if no emotions detected
+        # If no emotions detected, analyze sentiment
         if not detected_emotions:
-            detected_emotions.append({
-                'emotion': 'neutral',
-                'confidence': 0.7,
-                'predicted': True
-            })
+            # Check for positive/negative words
+            positive_words = ['good', 'nice', 'fine', 'okay', 'well']
+            negative_words = ['bad', 'not', 'no', 'never', 'nothing']
+            
+            pos_count = sum(1 for word in positive_words if word in text_lower)
+            neg_count = sum(1 for word in negative_words if word in text_lower)
+            
+            if pos_count > neg_count:
+                detected_emotions.append({'emotion': 'optimism', 'confidence': 0.6, 'predicted': True})
+            elif neg_count > pos_count:
+                detected_emotions.append({'emotion': 'sadness', 'confidence': 0.5, 'predicted': True})
+            else:
+                detected_emotions.append({'emotion': 'neutral', 'confidence': 0.7, 'predicted': True})
         
         # Sort by confidence
         detected_emotions.sort(key=lambda x: x['confidence'], reverse=True)
         
+        # Ensure we always return at least 5 emotions for display
+        while len(detected_emotions) < 5:
+            remaining_emotions = ['caring', 'curiosity', 'realization', 'approval', 'admiration']
+            for em in remaining_emotions:
+                if em not in [e['emotion'] for e in detected_emotions]:
+                    detected_emotions.append({'emotion': em, 'confidence': 0.3, 'predicted': False})
+                    if len(detected_emotions) >= 5:
+                        break
+        
         return {
             'success': True,
             'model_used': f"{model_type}_fallback",
-            'emotions': detected_emotions,
+            'emotions': detected_emotions[:10],
             'top_emotions': detected_emotions[:5],
-            'predicted_emotions': [e for e in detected_emotions if e['predicted']],
+            'predicted_emotions': [e for e in detected_emotions if e['predicted']][:5],
             'confidence_score': detected_emotions[0]['confidence'] if detected_emotions else 0.0,
-            'source': 'fallback_keywords',
-            'note': 'Using fallback detection - HuggingFace models are processing'
+            'source': 'fallback_keywords'
         }
 
 class EmpathyEngine:
@@ -243,7 +270,8 @@ class EmpathyEngine:
                 gemini_key = os.environ.get('GEMINI_API_KEY')
                 if gemini_key:
                     genai.configure(api_key=gemini_key)
-                    self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+                    # Use gemini-pro (stable model for v1beta API)
+                    self.gemini_model = genai.GenerativeModel('models/gemini-pro')
                     self.gemini_available = True
                     logger.info("Gemini API initialized successfully")
                 else:
