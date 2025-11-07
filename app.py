@@ -273,24 +273,24 @@ class EmpathyEngine:
                 if gemini_key:
                     genai.configure(api_key=gemini_key)
                     
-                    # Try different model names
+                    # Try different model names (don't test during init, test on first use)
                     model_names = ['gemini-pro', 'gemini-1.5-flash', 'gemini-1.5-pro']
                     
                     for model_name in model_names:
                         try:
-                            logger.info(f"🔍 Trying Gemini model: {model_name}")
+                            logger.info(f"🔍 Initializing Gemini model: {model_name}")
                             self.gemini_model = genai.GenerativeModel(model_name)
-                            # Test the model with a simple prompt
-                            test_response = self.gemini_model.generate_content("Say hello")
                             self.gemini_available = True
-                            logger.info(f"✅ Gemini API initialized successfully with {model_name}")
+                            self.gemini_model_name = model_name
+                            logger.info(f"✅ Gemini model {model_name} initialized (will test on first use)")
                             break
                         except Exception as e:
-                            logger.warning(f"⚠️ Model {model_name} failed: {e}")
+                            logger.warning(f"⚠️ Model {model_name} initialization failed: {e}")
                             continue
                     
                     if not self.gemini_available:
                         logger.error("❌ All Gemini models failed to initialize")
+                        logger.error("Check your GEMINI_API_KEY and internet connection")
                 else:
                     logger.warning("⚠️ GEMINI_API_KEY not set in environment variables")
                     logger.warning("⚠️ Set GEMINI_API_KEY in Render dashboard to enable AI responses")
@@ -480,7 +480,11 @@ Important:
 
 Respond now:"""
 
+            logger.info(f"🤖 Calling Gemini model: {getattr(self, 'gemini_model_name', 'unknown')}")
+            
             response = self.gemini_model.generate_content(prompt)
+            
+            logger.info(f"✅ Gemini response received: {response.text[:50]}...")
             
             return {
                 'success': True,
@@ -492,7 +496,10 @@ Respond now:"""
             }
             
         except Exception as e:
-            logger.error(f"Advanced AI response failed: {e}")
+            logger.error(f"❌ Advanced AI response failed: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Full error: {traceback.format_exc()}")
+            logger.warning("⚠️ Falling back to template responses")
             return self._generate_template_response(text, emotions, primary_emotion)
     
     def _generate_template_response(self, text: str, emotions: Dict[str, Any], primary_emotion: str) -> Dict[str, Any]:
