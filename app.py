@@ -410,7 +410,10 @@ class EmpathyEngine:
                 primary_emotion = 'neutral'
             
             # Check if we should use advanced AI response
-            if self._should_use_advanced_response(emotions, text):
+            use_advanced = self._should_use_advanced_response(emotions, text)
+            logger.info(f"Using advanced AI: {use_advanced}, Gemini available: {self.gemini_available}")
+            
+            if use_advanced:
                 return self._generate_advanced_response(text, emotions, primary_emotion)
             else:
                 return self._generate_template_response(text, emotions, primary_emotion)
@@ -422,18 +425,8 @@ class EmpathyEngine:
     def _should_use_advanced_response(self, emotions: Dict[str, Any], text: str) -> bool:
         """Decide whether to use advanced AI response"""
         
-        # Use advanced response for:
-        # 1. Complex emotional states (multiple emotions)
-        # 2. Low confidence predictions
-        # 3. Longer, more complex text
-        
-        predicted_emotions = emotions.get('predicted_emotions', [])
-        confidence = emotions.get('confidence_score', 0.0)
-        
-        return (
-            self.gemini_available and
-            (len(predicted_emotions) > 2 or confidence < 0.6 or len(text) > 100)
-        )
+        # ALWAYS use Gemini AI if available for better responses
+        return self.gemini_available
     
     def _generate_advanced_response(self, text: str, emotions: Dict[str, Any], primary_emotion: str) -> Dict[str, Any]:
         """Generate response using advanced AI"""
@@ -443,19 +436,29 @@ class EmpathyEngine:
             predicted_emotions = emotions.get('predicted_emotions', [])
             emotion_list = [e['emotion'] for e in predicted_emotions[:3]]
             
-            prompt = f"""You are a compassionate mental health companion. A user has shared: "{text}"
+            prompt = f"""You are a warm, empathetic mental health companion AI. A person has just shared this with you:
 
-My emotion detection system identified these emotions: {', '.join(emotion_list) if emotion_list else primary_emotion}
-Primary emotion: {primary_emotion}
-Confidence: {emotions.get('confidence_score', 0.0):.2f}
+"{text}"
 
-Provide a warm, empathetic response (100-150 words) that:
-1. Acknowledges their emotional state
-2. Validates their feelings
-3. Offers gentle support
-4. Asks a thoughtful follow-up question if appropriate
+Detected emotions: {', '.join(emotion_list) if emotion_list else primary_emotion}
 
-Be genuine, supportive, and professional. Avoid giving medical advice."""
+Respond as a caring friend and mental health supporter. Your response should:
+- Be warm, genuine, and conversational (like talking to a trusted friend)
+- Acknowledge and validate their feelings without judgment
+- Show deep empathy and understanding
+- Offer gentle encouragement or perspective if appropriate
+- Ask a thoughtful follow-up question to continue the conversation
+- Be 2-4 sentences (50-100 words)
+- Sound natural and human, not robotic
+
+Important:
+- Don't give medical advice or diagnose
+- Don't be overly formal or clinical
+- Don't use phrases like "I'm an AI" or "as an AI"
+- Be supportive but not patronizing
+- Match their emotional tone
+
+Respond now:"""
 
             response = self.gemini_model.generate_content(prompt)
             
@@ -965,9 +968,13 @@ def chat_message():
         emotions = hf_client.predict_emotions(message, model_type)
         emotion_time = time.time() - start_time
         
-        # Generate empathetic response
+        # Generate empathetic response (force Gemini if requested)
         response_start = time.time()
-        empathetic_response = empathy_engine.generate_response(message, emotions)
+        if use_advanced_ai and empathy_engine.gemini_available:
+            logger.info("🤖 Using Gemini AI for response generation")
+            empathetic_response = empathy_engine._generate_advanced_response(message, emotions, emotions.get('top_emotions', [{}])[0].get('emotion', 'neutral'))
+        else:
+            empathetic_response = empathy_engine.generate_response(message, emotions)
         response_time = time.time() - response_start
         
         # Generate audio for the response (non-blocking)
