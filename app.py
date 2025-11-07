@@ -13,10 +13,12 @@ import json
 import os
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 import traceback
 import sqlite3
+import hashlib
+import secrets
 from werkzeug.exceptions import BadRequest, InternalServerError
 
 # Optional Gemini AI import
@@ -737,7 +739,215 @@ class DatabaseManager:
             logger.error(f"Error getting user history: {e}")
             return []
 
+class AuthManager:
+    """Manage user authentication and registration"""
+    
+    def __init__(self):
+        self.db_path = 'mental_health_users.db'
+        self._init_database()
+        logger.info("Auth manager initialized")
+    
+    def _init_database(self):
+        """Initialize user authentication database"""
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Create users table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                name TEXT,
+                age INTEGER,
+                gender TEXT,
+                country TEXT,
+                mental_health_goals TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_login DATETIME
+            )
+        ''')
+        
+        # Create sessions table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                token TEXT UNIQUE NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                expires_at DATETIME,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+    
+    def _hash_password(self, password: str) -> str:
+        """Hash password using SHA-256"""
+        return hashlib.sha256(password.encode()).hexdigest()
+    
+    def _generate_token(self) -> str:
+        """Generate secure random token"""
+        return secrets.token_urlsafe(32)
+    
+    def register_user(self, email: str, password: str, name: str, age: int, 
+                     gender: str, country: str = None, mental_health_goals: str = None) -> Dict:
+        """Register a new user"""
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Check if email already exists
+            cursor.execute('SELECT id FROM users WHERE email = ?', (email,))
+            if cursor.fetchone():
+                conn.close()
+                return {'success': False, 'message': 'Email already registered'}
+            
+            # Hash password
+            password_hash = self._hash_password(password)
+            
+            # Insert user
+            cursor.execute('''
+                INSERT INTO users (email, password_hash, name, age, gender, country, mental_health_goals)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (email, password_hash, name, age, gender, country, mental_health_goals))
+            
+            user_id = cursor.lastrowid
+            
+            # Generate session token
+            token = self._generate_token()
+            expires_at = datetime.now() + timedelta(days=30)
+            
+            cursor.execute('''
+                INSERT INTO sessions (user_id, token, expires_at)
+                VALUES (?, ?, ?)
+            ''', (user_id, token, expires_at))
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"New user registered: {email}")
+            
+            return {
+                'success': True,
+                'user_id': user_id,
+                'token': token,
+                'message': 'Registration successful'
+            }
+            
+        except Exception as e:
+            logger.error(f"Registration error: {e}")
+            return {'success': False, 'message': 'Registration failed'}
+    
+    def login_user(self, email: str, password: str) -> Dict:
+        """Login user and create session"""
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Get user
+            password_hash = self._hash_password(password)
+            cursor.execute('''
+                SELECT id, name FROM users 
+                WHERE email = ? AND password_hash = ?
+            ''', (email, password_hash))
+            
+            user = cursor.fetchone()
+            
+            if not user:
+                conn.close()
+                return {'success': False, 'message': 'Invalid email or password'}
+            
+            user_id, name = user
+            
+            # Update last login
+            cursor.execute('''
+                UPDATE users SET last_login = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (user_id,))
+            
+            # Generate new session token
+            token = self._generate_token()
+            expires_at = datetime.now() + timedelta(days=30)
+            
+            cursor.execute('''
+                INSERT INTO sessions (user_id, token, expires_at)
+                VALUES (?, ?, ?)
+            ''', (user_id, token, expires_at))
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"User logged in: {email}")
+            
+            return {
+                'success': True,
+                'user_id': user_id,
+                'name': name,
+                'token': token,
+                'message': 'Login successful'
+            }
+            
+        except Exception as e:
+            logger.error(f"Login error: {e}")
+            return {'success': False, 'message': 'Login failed'}
+    
+    def verify_token(self, token: str) -> Dict:
+        """Verify session token"""
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT s.user_id, u.email, u.name
+                FROM sessions s
+                JOIN users u ON s.user_id = u.id
+                WHERE s.token = ? AND s.expires_at > CURRENT_TIMESTAMP
+            ''', (token,))
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result:
+                user_id, email, name = result
+                return {
+                    'valid': True,
+                    'user_id': user_id,
+                    'email': email,
+                    'name': name
+                }
+            else:
+                return {'valid': False}
+                
+        except Exception as e:
+            logger.error(f"Token verification error: {e}")
+            return {'valid': False}
+    
+    def logout_user(self, token: str) -> bool:
+        """Logout user by invalidating token"""
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM sessions WHERE token = ?', (token,))
+            
+            conn.commit()
+            conn.close()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Logout error: {e}")
+            return False
+
 # Initialize components
+auth_manager = AuthManager()
 hf_client = HuggingFaceModelClient()
 empathy_engine = EmpathyEngine()
 db_manager = DatabaseManager()
@@ -816,6 +1026,165 @@ def index():
             'enhanced_distilbert': 'Transformer - High precision'
         }
     })
+
+# ============================================================================
+# AUTHENTICATION ENDPOINTS
+# ============================================================================
+
+@app.route('/api/auth/register', methods=['POST'])
+@limiter.limit("5 per hour")
+def register():
+    """
+    Register a new user
+    
+    Expected JSON:
+    {
+        "email": "user@example.com",
+        "password": "securepassword",
+        "name": "John Doe",
+        "age": 25,
+        "gender": "male",
+        "country": "USA",
+        "mental_health_goals": "anxiety"
+    }
+    """
+    try:
+        if not request.is_json:
+            raise BadRequest("Request must be JSON")
+        
+        data = request.get_json()
+        
+        # Validate required fields
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
+        name = data.get('name', '').strip()
+        age = data.get('age')
+        gender = data.get('gender', '').strip()
+        country = data.get('country', '').strip()
+        mental_health_goals = data.get('mental_health_goals', '').strip()
+        
+        if not email or not password or not name or not age or not gender:
+            raise BadRequest("Missing required fields")
+        
+        if len(password) < 8:
+            raise BadRequest("Password must be at least 8 characters")
+        
+        if not isinstance(age, int) or age < 13 or age > 120:
+            raise BadRequest("Invalid age")
+        
+        # Register user
+        result = auth_manager.register_user(
+            email, password, name, age, gender, country, mental_health_goals
+        )
+        
+        if result['success']:
+            return jsonify(result), 201
+        else:
+            return jsonify(result), 400
+            
+    except BadRequest as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Registration endpoint error: {e}")
+        return jsonify({'success': False, 'message': 'Registration failed'}), 500
+
+@app.route('/api/auth/login', methods=['POST'])
+@limiter.limit("10 per minute")
+def login():
+    """
+    Login user
+    
+    Expected JSON:
+    {
+        "email": "user@example.com",
+        "password": "securepassword"
+    }
+    """
+    try:
+        if not request.is_json:
+            raise BadRequest("Request must be JSON")
+        
+        data = request.get_json()
+        
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
+        
+        if not email or not password:
+            raise BadRequest("Email and password required")
+        
+        # Login user
+        result = auth_manager.login_user(email, password)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 401
+            
+    except BadRequest as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Login endpoint error: {e}")
+        return jsonify({'success': False, 'message': 'Login failed'}), 500
+
+@app.route('/api/auth/verify', methods=['POST'])
+def verify_token():
+    """
+    Verify authentication token
+    
+    Expected JSON:
+    {
+        "token": "user_token_here"
+    }
+    """
+    try:
+        if not request.is_json:
+            raise BadRequest("Request must be JSON")
+        
+        data = request.get_json()
+        token = data.get('token', '')
+        
+        if not token:
+            raise BadRequest("Token required")
+        
+        result = auth_manager.verify_token(token)
+        
+        return jsonify(result), 200
+            
+    except Exception as e:
+        logger.error(f"Token verification endpoint error: {e}")
+        return jsonify({'valid': False}), 500
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    """
+    Logout user
+    
+    Expected JSON:
+    {
+        "token": "user_token_here"
+    }
+    """
+    try:
+        if not request.is_json:
+            raise BadRequest("Request must be JSON")
+        
+        data = request.get_json()
+        token = data.get('token', '')
+        
+        if not token:
+            raise BadRequest("Token required")
+        
+        success = auth_manager.logout_user(token)
+        
+        return jsonify({'success': success}), 200
+            
+    except Exception as e:
+        logger.error(f"Logout endpoint error: {e}")
+        return jsonify({'success': False}), 500
+
+# ============================================================================
+# HEALTH & INFO ENDPOINTS
+# ============================================================================
 
 @app.route('/api/health')
 def health_check():
