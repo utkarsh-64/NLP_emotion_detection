@@ -445,8 +445,8 @@ class EmpathyEngine:
     def _should_use_advanced_response(self, emotions: Dict[str, Any], text: str) -> bool:
         """Decide whether to use advanced AI response"""
         
-        # ALWAYS use Gemini AI if available for better responses
-        return self.gemini_available
+        # Disable Gemini for now - using enhanced templates instead
+        return False
     
     def _generate_advanced_response(self, text: str, emotions: Dict[str, Any], primary_emotion: str) -> Dict[str, Any]:
         """Generate response using advanced AI"""
@@ -502,27 +502,102 @@ Respond now:"""
             logger.warning("⚠️ Falling back to template responses")
             return self._generate_template_response(text, emotions, primary_emotion)
     
+    def _detect_question_type(self, text: str) -> str:
+        """Detect if user is asking a specific type of question"""
+        text_lower = text.lower()
+        
+        # Greetings
+        if any(word in text_lower for word in ['hello', 'hi', 'hey', 'greetings']):
+            return 'greeting'
+        
+        # How are you
+        if any(phrase in text_lower for phrase in ['how are you', 'how r u', 'how do you feel', 'are you okay']):
+            return 'how_are_you'
+        
+        # Who are you
+        if any(phrase in text_lower for phrase in ['who are you', 'what are you', 'who r u', 'tell me about yourself']):
+            return 'who_are_you'
+        
+        # What can you do
+        if any(phrase in text_lower for phrase in ['what can you do', 'how can you help', 'what do you do', 'can you help me']):
+            return 'capabilities'
+        
+        # Thank you
+        if any(word in text_lower for word in ['thank you', 'thanks', 'thank u', 'appreciate']):
+            return 'gratitude'
+        
+        return None
+    
     def _generate_template_response(self, text: str, emotions: Dict[str, Any], primary_emotion: str) -> Dict[str, Any]:
-        """Generate response using templates"""
+        """Generate response using enhanced templates with question detection"""
         
         import random
         
-        # Get templates for primary emotion
-        templates = self.response_templates.get(primary_emotion, self.response_templates['neutral'])
+        # Check if user is asking a specific question
+        question_type = self._detect_question_type(text)
         
-        # Build response
-        response_parts = []
+        if question_type == 'greeting':
+            responses = [
+                "Hello! I'm so glad you're here. I'm your mental health companion, and I'm here to listen and support you. How are you feeling today?",
+                "Hi there! It's wonderful to connect with you. I'm here to provide a safe space for you to share your thoughts and feelings. What's on your mind?",
+                "Hey! Thanks for reaching out. I'm here to offer support and understanding. How can I help you today?",
+                "Hello! I'm your AI companion focused on mental health and emotional well-being. I'm here to listen without judgment. How are you doing?"
+            ]
+            response_text = random.choice(responses)
         
-        # Acknowledgment
-        response_parts.append(random.choice(templates['acknowledgment']))
+        elif question_type == 'how_are_you':
+            responses = [
+                "Thank you for asking! I'm here and ready to support you. More importantly, how are YOU feeling? I'm here to listen to whatever you'd like to share.",
+                "I appreciate your kindness! As an AI companion, I'm always here and ready to help. But let's focus on you - how are you really doing today?",
+                "That's thoughtful of you to ask! I'm functioning well and ready to support you. What matters most is how you're feeling. Would you like to talk about it?",
+                "I'm doing well, thank you! My purpose is to be here for you. How are you feeling right now? I'm here to listen."
+            ]
+            response_text = random.choice(responses)
         
-        # Validation
-        response_parts.append(random.choice(templates['validation']))
+        elif question_type == 'who_are_you':
+            responses = [
+                "I'm your AI mental health companion, designed to provide emotional support and understanding. I'm here to listen to your thoughts and feelings without judgment, and offer empathetic responses. Think of me as a supportive friend who's always available to talk.",
+                "I'm an AI companion specialized in mental health support. My purpose is to detect emotions in your messages and respond with empathy and understanding. I'm here 24/7 to listen, validate your feelings, and provide a safe space for you to express yourself.",
+                "I'm your personal mental health AI assistant. I use advanced emotion detection to understand how you're feeling and respond with care and empathy. I'm not a replacement for professional therapy, but I'm here to offer support, listen without judgment, and help you process your emotions.",
+                "I'm an AI-powered mental health companion created to support your emotional well-being. I can detect emotions in your messages and provide empathetic, supportive responses. I'm here to listen, validate your feelings, and offer a compassionate space for you to share."
+            ]
+            response_text = random.choice(responses)
         
-        # Support
-        response_parts.append(random.choice(templates['support']))
+        elif question_type == 'capabilities':
+            responses = [
+                "I can help in several ways: I detect emotions in your messages, provide empathetic responses, offer a judgment-free space to talk, and help you process your feelings. I'm here to listen, validate your emotions, and support you through difficult times. What would you like to talk about?",
+                "I'm here to support your mental health by: detecting and understanding your emotions, responding with empathy and care, providing a safe space to express yourself, and offering validation for your feelings. I can't replace professional therapy, but I'm always here to listen. How can I support you today?",
+                "I can help you by: listening to whatever you want to share, detecting emotions in your messages, responding with understanding and empathy, validating your feelings, and providing emotional support. Think of me as a supportive companion who's always available. What's on your mind?",
+                "My main purpose is to support your emotional well-being. I can: understand and detect your emotions, provide empathetic responses, offer a non-judgmental space to talk, help you process feelings, and be here whenever you need someone to listen. What would you like to discuss?"
+            ]
+            response_text = random.choice(responses)
         
-        response_text = ' '.join(response_parts)
+        elif question_type == 'gratitude':
+            responses = [
+                "You're very welcome! I'm glad I could be here for you. Remember, I'm always available whenever you need support. How are you feeling now?",
+                "It's my pleasure to support you! Thank you for trusting me with your thoughts and feelings. I'm here anytime you need to talk. Is there anything else on your mind?",
+                "I'm happy I could help! Your well-being matters, and I'm here whenever you need a listening ear. How are things going for you right now?",
+                "You're so welcome! I'm grateful you felt comfortable sharing with me. I'm always here if you need support. Take care of yourself!"
+            ]
+            response_text = random.choice(responses)
+        
+        else:
+            # Use emotion-based templates
+            templates = self.response_templates.get(primary_emotion, self.response_templates['neutral'])
+            
+            # Build response with more variety
+            response_parts = []
+            
+            # Acknowledgment
+            response_parts.append(random.choice(templates['acknowledgment']))
+            
+            # Validation
+            response_parts.append(random.choice(templates['validation']))
+            
+            # Support
+            response_parts.append(random.choice(templates['support']))
+            
+            response_text = ' '.join(response_parts)
         
         return {
             'success': True,
@@ -530,7 +605,8 @@ Respond now:"""
             'type': 'template_based',
             'primary_emotion': primary_emotion,
             'emotions_addressed': [primary_emotion],
-            'confidence': emotions.get('confidence_score', 0.0)
+            'confidence': emotions.get('confidence_score', 0.0),
+            'question_detected': question_type
         }
     
     def _generate_fallback_response(self) -> Dict[str, Any]:
