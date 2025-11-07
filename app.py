@@ -73,19 +73,18 @@ class HuggingFaceModelClient:
             'enhanced_distilbert': f"{self.username}/huggingface_distilbert_model"
         }
         
-        # Multiple API endpoints (HuggingFace is transitioning)
-        self.api_endpoints = [
-            "https://api-inference.huggingface.co/models",
-            "https://router.huggingface.co/hf-inference/models"
-        ]
+        # Use public inference API endpoint
+        self.api_endpoint = "https://api-inference.huggingface.co/models"
         
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {os.environ.get('HUGGINGFACE_TOKEN', '')}"
-        }
-        
-        # Remove auth header if no token
-        if not os.environ.get('HUGGINGFACE_TOKEN'):
+        # Only add auth if token exists
+        hf_token = os.environ.get('HUGGINGFACE_TOKEN', '')
+        if hf_token:
+            self.headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {hf_token}"
+            }
+        else:
+            # Use public API without auth
             self.headers = {"Content-Type": "application/json"}
         
         logger.info(f"HuggingFace client initialized for user: {self.username}")
@@ -106,47 +105,38 @@ class HuggingFaceModelClient:
             }
         }
         
-        # Try multiple API endpoints
-        for endpoint in self.api_endpoints:
-            api_url = f"{endpoint}/{model_name}"
+        # Try HuggingFace API
+        api_url = f"{self.api_endpoint}/{model_name}"
+        
+        try:
+            logger.info(f"Calling HuggingFace API: {api_url}")
             
-            try:
-                logger.info(f"Trying HuggingFace API: {api_url}")
+            response = requests.post(
+                api_url, 
+                headers=self.headers, 
+                json=payload, 
+                timeout=timeout
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"HuggingFace API success: {model_type}")
+                return self._process_hf_response(result, model_type)
+            
+            elif response.status_code == 503:
+                logger.warning(f"Model loading (503), using fallback")
+                return self._fallback_emotion_detection(text, model_type)
+            
+            else:
+                logger.error(f"HuggingFace API error {response.status_code}: {response.text}")
+                return self._fallback_emotion_detection(text, model_type)
                 
-                response = requests.post(
-                    api_url, 
-                    headers=self.headers, 
-                    json=payload, 
-                    timeout=timeout
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    logger.info(f"HuggingFace API success: {model_type}")
-                    return self._process_hf_response(result, model_type)
-                
-                elif response.status_code == 503:
-                    logger.warning(f"Model loading (503): {model_type}")
-                    continue
-                
-                elif response.status_code == 401:
-                    logger.warning(f"Authentication required (401): {api_url}")
-                    continue
-                
-                elif response.status_code == 410:
-                    logger.warning(f"API endpoint deprecated (410): {api_url}")
-                    continue
-                
-                else:
-                    logger.error(f"HuggingFace API error {response.status_code}: {response.text}")
-                    continue
-                    
-            except requests.exceptions.Timeout:
-                logger.warning(f"Timeout for {api_url}")
-                continue
-            except Exception as e:
-                logger.error(f"Request error for {api_url}: {e}")
-                continue
+        except requests.exceptions.Timeout:
+            logger.warning(f"Timeout for {api_url}, using fallback")
+            return self._fallback_emotion_detection(text, model_type)
+        except Exception as e:
+            logger.error(f"Request error for {api_url}: {e}")
+            return self._fallback_emotion_detection(text, model_type)
         
         # If all APIs fail, return fallback response
         logger.warning(f"All HuggingFace APIs failed for {model_type}, using fallback")
@@ -253,7 +243,7 @@ class EmpathyEngine:
                 gemini_key = os.environ.get('GEMINI_API_KEY')
                 if gemini_key:
                     genai.configure(api_key=gemini_key)
-                    self.gemini_model = genai.GenerativeModel('gemini-pro')
+                    self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
                     self.gemini_available = True
                     logger.info("Gemini API initialized successfully")
                 else:
@@ -577,19 +567,9 @@ class AudioGenerator:
             if len(text) > 500:
                 text = text[:500] + "..."
             
-            # Generate audio with timeout protection
-            logger.info(f"Generating audio for text: {text[:50]}...")
-            
-            self.engine.save_to_file(text, filepath)
-            self.engine.runAndWait()
-            
-            # Verify file was created and has content
-            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                logger.info(f"Audio generated successfully: {filename} ({os.path.getsize(filepath)} bytes)")
-                return filename
-            else:
-                logger.warning(f"Audio file not created or empty: {filepath}")
-                return None
+            # Audio generation disabled for now (Render compatibility)
+            logger.info(f"Audio generation skipped (disabled): {text[:50]}...")
+            return None
                 
         except Exception as e:
             logger.error(f"Audio generation failed: {e}")
