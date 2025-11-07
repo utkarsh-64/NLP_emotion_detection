@@ -272,16 +272,34 @@ class EmpathyEngine:
                 gemini_key = os.environ.get('GEMINI_API_KEY')
                 if gemini_key:
                     genai.configure(api_key=gemini_key)
-                    # Use gemini-pro (stable model for v1beta API)
-                    self.gemini_model = genai.GenerativeModel('models/gemini-pro')
-                    self.gemini_available = True
-                    logger.info("Gemini API initialized successfully")
+                    
+                    # Try different model names
+                    model_names = ['gemini-pro', 'gemini-1.5-flash', 'gemini-1.5-pro']
+                    
+                    for model_name in model_names:
+                        try:
+                            logger.info(f"🔍 Trying Gemini model: {model_name}")
+                            self.gemini_model = genai.GenerativeModel(model_name)
+                            # Test the model with a simple prompt
+                            test_response = self.gemini_model.generate_content("Say hello")
+                            self.gemini_available = True
+                            logger.info(f"✅ Gemini API initialized successfully with {model_name}")
+                            break
+                        except Exception as e:
+                            logger.warning(f"⚠️ Model {model_name} failed: {e}")
+                            continue
+                    
+                    if not self.gemini_available:
+                        logger.error("❌ All Gemini models failed to initialize")
                 else:
-                    logger.info("Gemini API key not provided")
+                    logger.warning("⚠️ GEMINI_API_KEY not set in environment variables")
+                    logger.warning("⚠️ Set GEMINI_API_KEY in Render dashboard to enable AI responses")
             else:
-                logger.info("Gemini AI library not installed")
+                logger.warning("⚠️ google-generativeai library not installed")
+                logger.warning("⚠️ Run: pip install google-generativeai")
         except Exception as e:
-            logger.warning(f"Gemini API not available: {e}")
+            logger.error(f"❌ Gemini API initialization failed: {e}")
+            logger.error(f"Error details: {traceback.format_exc()}")
         
         # Load response templates
         self.response_templates = self._load_response_templates()
@@ -1186,6 +1204,30 @@ def logout():
 # HEALTH & INFO ENDPOINTS
 # ============================================================================
 
+@app.route('/api/gemini/status')
+def gemini_status():
+    """Check Gemini AI status"""
+    try:
+        status = {
+            'gemini_library_installed': GEMINI_AVAILABLE,
+            'gemini_api_key_set': bool(os.environ.get('GEMINI_API_KEY')),
+            'gemini_initialized': empathy_engine.gemini_available,
+            'message': ''
+        }
+        
+        if empathy_engine.gemini_available:
+            status['message'] = '✅ Gemini AI is active and ready'
+        elif not GEMINI_AVAILABLE:
+            status['message'] = '❌ google-generativeai library not installed'
+        elif not os.environ.get('GEMINI_API_KEY'):
+            status['message'] = '❌ GEMINI_API_KEY not set in environment'
+        else:
+            status['message'] = '❌ Gemini initialization failed'
+        
+        return jsonify(status), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/health')
 def health_check():
     """Health check endpoint"""
@@ -1339,11 +1381,18 @@ def chat_message():
         
         # Generate empathetic response (force Gemini if requested)
         response_start = time.time()
+        
+        logger.info(f"🔍 Response generation - use_advanced_ai: {use_advanced_ai}, gemini_available: {empathy_engine.gemini_available}")
+        
         if use_advanced_ai and empathy_engine.gemini_available:
             logger.info("🤖 Using Gemini AI for response generation")
             empathetic_response = empathy_engine._generate_advanced_response(message, emotions, emotions.get('top_emotions', [{}])[0].get('emotion', 'neutral'))
         else:
+            if not empathy_engine.gemini_available:
+                logger.warning("⚠️ Gemini not available, using template responses")
             empathetic_response = empathy_engine.generate_response(message, emotions)
+        
+        logger.info(f"📝 Response type: {empathetic_response.get('type', 'unknown')}")
         response_time = time.time() - response_start
         
         # Generate audio for the response (non-blocking)
